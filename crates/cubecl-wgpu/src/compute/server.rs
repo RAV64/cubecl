@@ -601,16 +601,11 @@ impl<C: WgpuCompiler> ComputeServer for WgpuServer<C> {
         }
 
         // Route every allocation from here until `end_capture` into the
-        // persistent pools and track the touched slices. Called before the
-        // warmup run, so warmup populates the pools with the capture run's
-        // full working set; the recorded run then reuses those slices and
-        // everything it touches is pinned to the graph at `end_capture`.
-        //
-        // From `graph_prepare` to `end_capture`, the capturing stream also
-        // requires isolation in the scheduler (see
-        // [`SchedulerStreamBackend::requires_isolation`]): warmup must prime
-        // this stream's own pools, and the recording must contain exactly this
-        // stream's tasks.
+        // persistent pools and track the touched slices: warmup populates the
+        // pools with the capture run's full working set, the recorded run
+        // reuses those slices, and everything it touches is pinned to the
+        // graph at `end_capture`. The non-`NoCapture` state also isolates this
+        // stream in the scheduler (see `requires_isolation`).
         stream.mem_manage.capture_begin();
         stream.capturing = StreamCaptureState::Prepare;
         Ok(())
@@ -736,19 +731,17 @@ impl<C: WgpuCompiler> ComputeServer for WgpuServer<C> {
     }
 
     fn graph_destroy(&mut self, graph: GraphId, stream_id: StreamId) {
-        // No-op for an unknown id (e.g. a double release).
-        if !self.graphs.contains_key(&graph) {
+        // No-op for an unknown id (e.g. a double release). The graph is held
+        // until the end of this function, so its pins outlive the flush below.
+        let Some(wgpu_graph) = self.graphs.remove(&graph) else {
             return;
-        }
+        };
         let stream = self.scheduler.stream(&stream_id);
-        // Submit any replay still sitting in the encoder before the pins drop.
-        // Once the replay is *submitted*, releasing the graph's slices is safe
-        // without a host sync — unlike CUDA: a later allocation reusing a
-        // freed slice is only ever written through queue-ordered operations
-        // (which land after the in-flight replay), and wgpu defers actual
-        // buffer destruction past submissions that reference it. Without this
-        // flush, a reused slice's `queue.write_buffer` would execute at the
-        // *next* submit — before a still-unsubmitted replay reads it.
+        // Submit any replay still sitting in the encoder before the pins drop:
+        // without this, a reused slice's `queue.write_buffer` would execute at
+        // the *next* submit — before the still-unsubmitted replay reads it.
+        // Once the replay is submitted, queue ordering makes releasing the
+        // slices safe without a host sync — unlike CUDA.
         let _ = stream
             .flush(StreamErrorMode {
                 ignore: true,
@@ -758,7 +751,7 @@ impl<C: WgpuCompiler> ComputeServer for WgpuServer<C> {
         // Release the info-cache entries this graph pinned; entries no other
         // live graph still pins are dropped, freeing their buffers.
         stream.info_cache.graph_release(graph);
-        self.graphs.remove(&graph);
+        drop(wgpu_graph);
     }
 }
 

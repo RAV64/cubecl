@@ -25,11 +25,8 @@ pub trait SchedulerStreamBackend {
     /// itself — no interleaving of its tasks onto another stream, and no other
     /// stream's tasks onto it. While any stream involved in an execution
     /// requires isolation, the scheduler falls back to the sequential path.
-    ///
-    /// A graph capture engages this for its whole prepare → record window: the
-    /// warmup run must prime the capturing stream's own memory pools, and the
-    /// recording must contain exactly that stream's tasks — interleaved
-    /// execution would do either on an arbitrary stream. Defaults to `false`.
+    /// A graph capture engages this for its whole prepare → record window.
+    /// Defaults to `false`.
     fn requires_isolation(_stream: &Self::Stream) -> bool {
         false
     }

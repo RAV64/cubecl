@@ -181,7 +181,8 @@ impl BindingsResource {
         mut self,
         stream: &mut WgpuStream,
     ) -> (Vec<WgpuResource>, Vec<WgpuResource>, Option<Addresses>) {
-        let info = (!self.info.data.is_empty()).then(|| stream.info_uniform(&self.info.data));
+        let info = (!self.info.data.is_empty())
+            .then(|| stream.info_uniform(core::mem::take(&mut self.info.data)));
         match self.compiler_info {
             CompilerInfo::Vulkan { params_transfer } => {
                 let addresses = self

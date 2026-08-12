@@ -1,19 +1,23 @@
+//! Software graph capture for wgpu.
+//!
+//! WebGPU has no driver-side graph object and no re-submittable command
+//! buffers (`queue.submit` consumes them), so unlike CUDA/HIP a captured graph
+//! is a **software graph**: everything a launch resolves per dispatch —
+//! pipeline lookup, binding resolution, info-uniform upload, bind group
+//! creation — is done once while recording, and
+//! [`WgpuStream::replay_graph`](super::stream::WgpuStream::replay_graph)
+//! re-encodes the prebuilt state in a tight loop. Replay cost stays O(n) in
+//! recorded tasks (encoding cannot be skipped under WebGPU), but with a far
+//! smaller constant than the full launch path.
+
 use crate::WgpuResource;
 use crate::schedule::Addresses;
 use cubecl_runtime::memory_management::{ManagedMemoryHandle, SharedMemoryBindings};
 use std::sync::Arc;
 use wgpu::ComputePipeline;
 
-/// A captured wgpu graph: the recorded launch sequence, fully resolved.
-///
-/// WebGPU has no driver-side graph object and no re-submittable command
-/// buffers (`queue.submit` consumes them), so unlike CUDA/HIP the graph is a
-/// **software graph**: everything a launch resolves per dispatch — pipeline
-/// lookup, binding resolution, info-uniform upload, bind group creation — is
-/// done once while recording, and [`WgpuStream::replay_graph`](super::stream::WgpuStream::replay_graph)
-/// re-encodes the prebuilt state in a tight loop. Replay cost stays O(n) in
-/// recorded tasks (encoding cannot be skipped under WebGPU), but with a far
-/// smaller constant than the full launch path.
+/// A captured graph: the recorded launch sequence, fully resolved (see the
+/// [module docs](self)).
 ///
 /// Owned by the [`WgpuServer`](super::server::WgpuServer) registry and
 /// referenced by [`GraphId`](cubecl_runtime::id::GraphId); the client
@@ -24,10 +28,8 @@ pub struct WgpuGraph {
     /// The recorded tasks, replayed in order.
     pub(crate) tasks: Vec<ReplayTask>,
     /// Every pool slice the capture window allocated (intermediates, info
-    /// uniforms, Vulkan address buffers), pinned for the graph's lifetime. A
-    /// replay re-runs the recorded dispatches against these exact buffers;
-    /// retaining the handles keeps the memory pools from reusing the slices.
-    /// Dropped with the graph, releasing the memory.
+    /// uniforms, Vulkan address buffers), pinned so the pools cannot reuse
+    /// memory a replay still runs against. Dropped with the graph.
     pub(crate) _retained: Vec<ManagedMemoryHandle>,
     /// Cross-stream input bindings the recorded tasks reference, pinned for
     /// the graph's lifetime instead of until the next submission (the normal
@@ -39,10 +41,9 @@ pub struct WgpuGraph {
 #[derive(Debug)]
 pub(crate) struct ReplayTask {
     pub(crate) pipeline: Arc<ComputePipeline>,
-    /// Built once at record time; `wgpu` bind groups are reusable, and the
-    /// buffers they reference are pinned by the graph, so the group stays
-    /// valid for the graph's lifetime. `None` when the kernel binds no
-    /// resources (Vulkan immediate-address mode).
+    /// Built once at record time; bind groups are reusable and the buffers
+    /// they reference are pinned by the graph. `None` when the kernel binds
+    /// no resources (Vulkan immediate-address mode).
     pub(crate) bind_group: Option<wgpu::BindGroup>,
     /// Vulkan buffer device addresses passed as immediates. Stable across
     /// replays because the buffers they point into are pinned.
@@ -68,14 +69,10 @@ pub(crate) enum ReplayDispatch {
 #[derive(Debug, Default)]
 pub(crate) struct GraphRecording {
     pub(crate) tasks: Vec<ReplayTask>,
-    /// Cross-stream input bindings of recorded tasks (see
-    /// [`WgpuGraph::_shared`]).
+    /// Cross-stream input bindings of recorded tasks (see [`WgpuGraph::_shared`]).
     pub(crate) shared: SharedMemoryBindings,
-    /// Uniform slices created inside the recording window (info uniforms on a
-    /// cache miss, Vulkan address buffers). Holding the handles keeps the
-    /// slices alive until `end_capture`, where the memory manager's
-    /// `capture_end` retains every live touched slice on the graph — without
-    /// this, the retention would silently depend on no uniform release running
-    /// mid-window.
+    /// Uniform slices created inside the window, held alive until
+    /// `end_capture` so the memory manager's `capture_end` retains them on
+    /// the graph — retention only covers slices still live at that point.
     pub(crate) uniform_pins: Vec<ManagedMemoryHandle>,
 }

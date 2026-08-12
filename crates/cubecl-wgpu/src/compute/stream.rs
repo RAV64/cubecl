@@ -175,10 +175,8 @@ impl WgpuStream {
     pub fn enqueue_task(&mut self, task: ScheduleTask) {
         match task {
             ScheduleTask::Write { data, buffer } => {
-                // Defensive: the server rejects writes before they are queued
-                // while a capture is recording, and `begin_capture` drains the
-                // queue before recording starts, so no legitimate write can
-                // reach a recording stream.
+                // Defensive: the server already rejects writes while recording,
+                // and `begin_capture` drains the queue, so none should reach here.
                 if self.capturing.is_recording() {
                     self.errors.push(graph_state_error(
                         "write: writing data is not supported inside a capture window on wgpu",
@@ -490,28 +488,25 @@ impl WgpuStream {
     /// read-only metadata (no buffer bindings), so sharing it across launches —
     /// even of different kernels — is sound; see
     /// [`MetadataInfoCache`](cubecl_runtime::metadata_cache::MetadataInfoCache).
-    /// A hit's buffer bytes always equal the key bytes, so it is byte-identical
-    /// to what the miss path would have built and uploaded.
-    pub(crate) fn info_uniform(&mut self, words: &[u64]) -> WgpuResource {
-        let size = core::mem::size_of_val(words);
+    /// `words` is taken by value so a miss hands it to the cache as the key
+    /// without cloning. A hit's buffer bytes always equal the key bytes, so it
+    /// is byte-identical to what the miss path would have built and uploaded.
+    pub(crate) fn info_uniform(&mut self, words: Vec<u64>) -> WgpuResource {
+        let size = core::mem::size_of_val(words.as_slice());
         // The capture lifecycle drives the cache: while a graph is prepared or
         // recording, every buffer is cached, none is evicted, and touched
         // entries are pinned to the graph being built (see
         // [`StreamCaptureState::cache_mode`]).
         self.info_cache.mode(self.capturing.cache_mode());
         if !self.info_cache.should_cache(size) {
-            return self.create_uniform(bytemuck::cast_slice(words));
+            return self.create_uniform(bytemuck::cast_slice(&words));
         }
-        // Look up by the borrowed words — a hit clones nothing but the
-        // resource. On a miss we build the uniform and clone the words into
-        // the cache as the key.
-        if let Some((_handle, resource)) = self.info_cache.get(words) {
+        if let Some((_handle, resource)) = self.info_cache.get(&words) {
             return resource;
         }
         let (handle, resource) = self.mem_manage.reserve_uniform(size as u64);
-        self.write_to_buffer(&resource, bytemuck::cast_slice(words));
-        self.info_cache
-            .insert(words.to_vec(), (handle, resource.clone()));
+        self.write_to_buffer(&resource, bytemuck::cast_slice(&words));
+        self.info_cache.insert(words, (handle, resource.clone()));
         resource
     }
 
