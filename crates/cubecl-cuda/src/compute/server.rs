@@ -6,7 +6,7 @@ use crate::{
         communication::{get_nccl_comm_id, get_nccl_dtype_count, to_nccl_op},
         context::CudaContext,
         graph::CudaGraph,
-        stream::{CudaStreamBackend, StreamCaptureState},
+        stream::CudaStreamBackend,
         sync::Fence,
     },
 };
@@ -39,7 +39,7 @@ use cubecl_runtime::{
     },
     server::ComputeServer,
     storage::{ComputeStorage, ManagedResource},
-    stream::MultiStream,
+    stream::{MultiStream, StreamCaptureState, graph_state_error},
 };
 use cudarc::driver::sys::{
     CUstream_st, CUtensorMap, CUtensorMapDataType, CUtensorMapFloatOOBfill, CUtensorMapInterleave,
@@ -121,16 +121,6 @@ unsafe fn count_memory_nodes(graph: cudarc::driver::sys::CUgraph) -> usize {
             )
         })
         .count()
-}
-
-/// Build a [`ServerError`] for a graph-capture call issued in the wrong state
-/// (e.g. `begin_capture` without `graph_prepare`, or a second overlapping
-/// capture on the same stream).
-fn graph_state_error(reason: impl Into<String>) -> ServerError {
-    ServerError::Generic {
-        reason: reason.into(),
-        backtrace: BackTrace::capture(),
-    }
 }
 
 /// Stage `words` into a device buffer, reusing a cached one when a launch has

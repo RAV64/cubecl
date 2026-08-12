@@ -4,7 +4,7 @@ use crate::{
         command::Command,
         context::HipContext,
         fence::Fence,
-        stream::{HipStreamBackend, StreamCaptureState},
+        stream::HipStreamBackend,
     },
     runtime::HipCompiler,
 };
@@ -35,7 +35,7 @@ use cubecl_runtime::{
     },
     server::ComputeServer,
     storage::{ComputeStorage, ManagedResource},
-    stream::MultiStream,
+    stream::{MultiStream, StreamCaptureState, graph_state_error},
 };
 use std::collections::HashMap;
 
@@ -113,16 +113,6 @@ unsafe fn count_memory_nodes(graph: cubecl_hip_sys::hipGraph_t) -> usize {
             )
         })
         .count()
-}
-
-/// Build a [`ServerError`] for a graph-capture call issued in the wrong state
-/// (e.g. `begin_capture` without `graph_prepare`, or a second overlapping
-/// capture on the same stream).
-fn graph_state_error(reason: impl Into<String>) -> ServerError {
-    ServerError::Generic {
-        reason: reason.into(),
-        backtrace: BackTrace::capture(),
-    }
 }
 
 /// Build — or reuse from the cache — the device buffer holding a launch's info words.
