@@ -21,6 +21,18 @@ pub trait SchedulerStreamBackend {
     fn flush(stream: &mut Self::Stream);
     /// Returns a mutable reference to the stream factory.
     fn factory(&mut self) -> &mut Self::Factory;
+    /// Whether this stream currently requires its own tasks to execute on
+    /// itself — no interleaving of its tasks onto another stream, and no other
+    /// stream's tasks onto it. While any stream involved in an execution
+    /// requires isolation, the scheduler falls back to the sequential path.
+    ///
+    /// A graph capture engages this for its whole prepare → record window: the
+    /// warmup run must prime the capturing stream's own memory pools, and the
+    /// recording must contain exactly that stream's tasks — interleaved
+    /// execution would do either on an arbitrary stream. Defaults to `false`.
+    fn requires_isolation(_stream: &Self::Stream) -> bool {
+        false
+    }
 }
 
 /// Represents a multi-stream scheduler that manages task execution across multiple streams.
@@ -213,10 +225,20 @@ impl<B: SchedulerStreamBackend> SchedulerMultiStream<B> {
             return;
         }
 
-        // Execute schedules based on the configured strategy.
+        // Execute schedules based on the configured strategy. Interleaving is
+        // suspended while any involved stream requires isolation (see
+        // [`SchedulerStreamBackend::requires_isolation`]); the sequential path
+        // keeps every task on the stream that owns it.
+        let isolation = schedules.iter().any(|schedule| {
+            let stream = unsafe { self.pool.get_mut_index(schedule.stream_index) }; // Note: `unsafe` usage assumes valid index.
+            B::requires_isolation(&stream.stream)
+        });
+
         match self.strategy {
-            SchedulerStrategy::Interleave => self.execute_schedules_interleave(schedules),
-            SchedulerStrategy::Sequential => self.execute_schedules_sequence(schedules),
+            SchedulerStrategy::Interleave if !isolation => {
+                self.execute_schedules_interleave(schedules)
+            }
+            _ => self.execute_schedules_sequence(schedules),
         }
     }
 
