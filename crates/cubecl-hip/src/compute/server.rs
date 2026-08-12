@@ -1,11 +1,6 @@
 use super::storage::gpu::{GpuResource, GpuStorage};
 use crate::{
-    compute::{
-        command::Command,
-        context::HipContext,
-        fence::Fence,
-        stream::HipStreamBackend,
-    },
+    compute::{command::Command, context::HipContext, fence::Fence, stream::HipStreamBackend},
     runtime::HipCompiler,
 };
 use cubecl_common::{bytes::Bytes, profile::ProfileDuration};
